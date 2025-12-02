@@ -522,8 +522,8 @@ with tab1:
         fig_daily_rmssd=plot_metric_with_band_plotly(
         df,
         value_col="dailyRmssd",
-        title="Daily RMSSD vs 7-day Rolling Average",
-        ylabel="RMSSD (ms)",
+        title="Daily HRV vs 7-day Rolling Average",
+        ylabel="HRV RMSSD (ms)",
         color_func=get_color_by_threshold,
         use_std=False)
         
@@ -533,8 +533,8 @@ with tab1:
         fig_deep_rmssd=plot_metric_with_band_plotly(
         df,
         value_col="deepRmssd",
-        title="Deep RMSSD vs 7-day Rolling Average",
-        ylabel="RMSSD (ms)",
+        title="Deep Sleep HRV vs 7-day Rolling Average",
+        ylabel="HRV RMSSD (ms)",
         color_func=get_color_by_threshold,
         use_std=False)
     
@@ -554,8 +554,8 @@ with tab1:
         df,
         value_col="restingHeartRate",
         my_colors=colorsHR,
-        title="Resting HR vs 7 Day Avg",
-        ylabel="Resting Heart Rate")
+        title="Resting HR vs 7-day Rolling Average",
+        ylabel="Resting Heart Rate (beats per minute)")
 
         st.plotly_chart(fig_resting_hr, width="content")
 
@@ -573,8 +573,8 @@ with tab1:
             df,
             value_col="breathing_rate",
             my_colors=colors_br_r,
-            title="Breathing rate vs 7-day Avg",
-            ylabel="Breathing Rate"
+            title="Breathing rate vs 7-day Rolling Average",
+            ylabel="Breathing Rate (times per minute)"
         )
         
         st.plotly_chart(fig_breathing_rate, width="content")
@@ -593,8 +593,8 @@ with tab1:
             df,
             value_col="deep_minutes",
             my_colors=colors_ds,
-            title="Deep sleep minutes vs 7-day Avg",
-            ylabel="Deep sleep (mins)"
+            title="Deep sleep minutes vs 7-day Rolling Average",
+            ylabel="Deep Sleep (mins)"
         )
         
         st.plotly_chart(fig_deep_minutes, width="content")
@@ -611,8 +611,8 @@ with tab1:
             df,
             value_col='rem_minutes',
             my_colors=colors_rem,
-            title='REM sleep minutes vs 7-day Avg',
-            ylabel="REM sleep (mins)"
+            title='REM sleep minutes vs 7-day Rolling Average',
+            ylabel="REM Sleep (mins)"
 
         )
         st.plotly_chart(fig_rem_minutes, width='content')
@@ -631,7 +631,7 @@ with tab2:
         df,
         value_col="dailyRmssd",
         title="Daily RMSSD by Month",
-        yaxis_title="Daily HRV",
+        yaxis_title="Daily HRV RMSSD (ms)",
         color_map=month_colors)
 
         st.plotly_chart(fig_monthly_rmssd_daily, width="content")
@@ -642,7 +642,7 @@ with tab2:
         df,
         value_col="deepRmssd",
         title="Deep RMSSD by Month",
-        yaxis_title="Deep HRV",
+        yaxis_title="Deep HRV RMSSD (ms)",
         color_map=month_colors)
         st.plotly_chart(fig_monthly_rmssd_deep, width="content")
 
@@ -652,7 +652,7 @@ with tab2:
         df,
         value_col="restingHeartRate",
         title="Resting HR by Month",
-        yaxis_title="Resting HR",
+        yaxis_title="Resting HR (beats per minute)",
         color_map=month_colors)
         st.plotly_chart(fig_monthly_resting_hr, width="content")
 
@@ -662,7 +662,7 @@ with tab2:
         df,
         value_col="breathing_rate",
         title="Breathing Rate by Month",
-        yaxis_title="Breathing Rate",
+        yaxis_title="Breathing Rate (times per minute)",
         color_map=month_colors)
         st.plotly_chart(fig_monthly_breathing_rate, width="content")
 
@@ -672,7 +672,7 @@ with tab2:
         df,
         value_col="temperature_deviation",
         title="Temperature Deviation by Month",
-        yaxis_title="Temperature Deviation",
+        yaxis_title="Temperature Deviation (relative to baseline, degrees Celcius)",
         color_map=month_colors)
         st.plotly_chart(fig_monthly_temp_dev, width="content")
 
