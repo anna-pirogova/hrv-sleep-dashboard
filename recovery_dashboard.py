@@ -20,7 +20,7 @@ st.set_page_config(page_title="Recovery Dashboard", layout="wide")
 # ---------------------
 # Replace with your actual data loading code
 
-DB_PATH = r"C:\Users\Admin\OneDrive\streamlit_project\mock_daily_summary.db"
+DB_PATH = "mock_daily_summary.db"
 
 @st.cache_data
 def load_data():
