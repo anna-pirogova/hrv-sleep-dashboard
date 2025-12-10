@@ -1254,9 +1254,9 @@ with tab4:
                 ax.text(mid_theta, 1.1, zone_labels[i], ha="center", va="center",
                         fontsize=9, rotation=np.rad2deg(mid_theta - np.pi/2),
                         color="white")
-        rcParams['font.family'] = segoe_ui.get_name()
-        rcParams['font.sans-serif'] = ['Segoi', 'DejaVu Sans',
-                               'Lucida Grande', 'Verdana']
+        #rcParams['font.family'] = segoe_ui.get_name()
+        #rcParams['font.sans-serif'] = ['Segoi', 'DejaVu Sans',
+                               #'Lucida Grande', 'Verdana']
         ax.set_axis_off()
         ax.set_ylim(0, 1.2)
         plt.title(title, fontsize=12, pad=12,fontname='Segoe UI')
