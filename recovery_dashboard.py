@@ -4,21 +4,18 @@ import plotly.graph_objects as go
 import plotly.express as px
 import sqlite3
 import matplotlib.pyplot as plt
+from matplotlib import rcParams, font_manager
+from datetime import datetime, timedelta
+import requests
+segoe_ui = font_manager.FontProperties(fname="C:/Windows/Fonts/segoeui.ttf")
+
 import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
 import collections
 import numpy as np
+api_key = st.secrets["openrouter"]["api_key"]
 
-
-
-
-# Optional: adjust Streamlit layout
 st.set_page_config(page_title="Recovery Dashboard", layout="wide")
-
-# ---------------------
-# Load your data
-# ---------------------
-# Replace with your actual data loading code
 
 DB_PATH = "mock_daily_summary.db"
 
@@ -35,8 +32,7 @@ def load_data():
     df["sleep_hours"] = df["time_in_bed"] / 60
     df["month_label"] = df["date"].dt.strftime("%b %Y")
     df["month_date"] = pd.to_datetime(df["date"]).dt.to_period("M").dt.to_timestamp()
-    
-    
+        
     return df
 
 df = load_data()
@@ -66,14 +62,11 @@ def add_lower_band(df, cols, prefix='_lower_band'):
         df[f"{col}{prefix}"]=df[col+'_mean_30d']-df[col+'_std_30d']
     return df
 
-add_rolling_mean_7days_features(df,['deepRmssd','dailyRmssd','deep_pct','restingHeartRate','breathing_rate','deep_minutes','rem_minutes'])
-
-add_rolling_mean_30days_features(df,['deep_minutes','deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','rem_minutes'])
-
-add_rolling_std_30days_features(df,['deep_minutes','deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','rem_minutes'])
-
-add_upper_band(df,['deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','deep_minutes','rem_minutes'])
-add_lower_band(df,['deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','deep_minutes','rem_minutes'])
+df=add_rolling_mean_7days_features(df,['deepRmssd','dailyRmssd','deep_pct','restingHeartRate','breathing_rate','deep_minutes','rem_minutes'])
+df=add_rolling_mean_30days_features(df,['deep_minutes','deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','rem_minutes'])
+df=add_rolling_std_30days_features(df,['deep_minutes','deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','rem_minutes'])
+df=add_upper_band(df,['deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','deep_minutes','rem_minutes'])
+df=add_lower_band(df,['deepRmssd','dailyRmssd','restingHeartRate','breathing_rate','deep_minutes','rem_minutes'])
 
 def get_color_by_threshold(
     val, ref, std=None, 
@@ -128,7 +121,6 @@ def get_color_rhr_std(val, ref, std):
     else:
         return '#3594cc'
 
-
 def get_color_br_std(val, ref, std):
     """
     Color coding for Breathing Rate using deviation from rolling mean.
@@ -163,7 +155,6 @@ def get_color_deep_minutes_adaptive(val, ref, std):
         return '#de425b'  # 🔴 Below normal → bad
     else:
         return '#3594cc'  # 🔵 Normal
-
 
 # Custom month-color mapping 
 month_colors = {
@@ -489,7 +480,192 @@ def plot_simple_scatter(
 
     return fig
 
+# AI coach
+def call_openrouter_chat(prompt, model="meta-llama/llama-3-8b-instruct", api_key=None):
+    if not api_key:
+        raise ValueError("Please provide your OpenRouter API key")
 
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "your-site.com",  # Optional
+        "X-Title": "your-app-name"        # Optional
+    }
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+
+    if response.status_code != 200:
+        print(response.text)
+        raise Exception(f"API Error {response.status_code}: {response.text}")
+
+    return response.json()["choices"][0]["message"]["content"]
+
+def build_metric_series_csv(df_filtered, metric, date_col='date'):
+    """
+    Builds a compressed, CSV-style AI-friendly series for a metric including:
+    - Raw value
+    - Comparison to 7-day and 30-day bands (below/within/above)
+    - Smoothed trend direction using 3-day rolling mean
+    - Turning point detection
+    - Trend streak length
+
+    Returns:
+        dict: {
+            "metric": metric_name,
+            "header": CSV header line,
+            "csv_rows": [str, str, ...]  # each row: date,value,vs_7d,vs_30d,trend,turning_point,streak
+        }
+    """
+    df = df_filtered.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+
+    col_low = f"{metric}_lower_band"
+    col_high = f"{metric}_upper_band"
+
+    required_cols = [metric, col_low, col_high]
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column: {col}")
+
+    df = df.sort_values(date_col).reset_index(drop=True)
+
+    # 3-day rolling means
+    df['rolling_mean_3'] = df[metric].rolling(window=3).mean()
+    df['rolling_mean_3_shifted'] = df['rolling_mean_3'].shift(3)
+
+    csv_rows = []
+    previous_trend = None
+    streak = 0
+
+    for _, row in df.iterrows():
+        if pd.isna(row[metric]) or pd.isna(row[col_low]) or pd.isna(row[col_high]):
+            continue
+
+        date = row[date_col].strftime('%Y-%m-%d')
+        value = round(row[metric], 2)
+
+        # Compare to 7-day band
+        if value < row[col_low]:
+            status_7d = "below"
+        elif value > row[col_high]:
+            status_7d = "above"
+        else:
+            status_7d = "within"
+
+        # Reuse 7-day status for 30-day (can change later)
+        status_30d = status_7d
+
+        current_avg = row['rolling_mean_3']
+        prev_avg = row['rolling_mean_3_shifted']
+
+        if pd.isna(current_avg) or pd.isna(prev_avg):
+            trend = "stable"
+            turning_point = False
+            streak = 0
+        else:
+            if current_avg > prev_avg:
+                trend = "rising"
+            elif current_avg < prev_avg:
+                trend = "falling"
+            else:
+                trend = "stable"
+
+            turning_point = previous_trend is not None and trend != previous_trend
+            streak = 1 if turning_point else streak + 1
+            previous_trend = trend
+
+        row_str = f"{date},{value},{status_7d},{status_30d},{trend},{turning_point},{streak}"
+        csv_rows.append(row_str)
+
+    return {
+        "metric": metric,
+        "header": "date,value,vs_7d_range,vs_30d_range,trend,turning_point,trend_streak",
+        "csv_rows": csv_rows
+    }
+
+def generate_insight_prompt_from_csv_series(
+    metric_csv_result,
+    metric_label=None,
+    n_days=None,
+    custom_instruction=None
+):
+    """
+    Builds a full prompt for LLM insight generation from compact metric CSV series.
+    """
+    header = metric_csv_result["header"]
+    rows = metric_csv_result["csv_rows"]
+    metric_name = metric_csv_result["metric"]
+    metric_label = metric_label or metric_name
+
+    if n_days is not None:
+        rows = rows[-n_days:]
+
+    default_instruction = f"""
+You are a recovery insights coach like the AI behind WHOOP.
+
+You are given {metric_label} time-series data in CSV format:
+Each row = date, value, 7-day range status, 30-day range status, smoothed trend, turning point flag, trend streak length.
+
+Your job is to write a very short recovery insight that sounds like a professional wearable app notification.
+No sections. No headings. Just 4–5 clear sentences max, in natural language. Use a helpful, signal-aware tone.
+
+Avoid vague phrases like "a few times", "some changes", or "recent". Use specific observations from the data (e.g., "3 out of last 7 days", "value increased by X", etc.) when possible.
+Use comparisons like "upward trend over the past 5 days" or "2 days below the lower threshold". Mention exact direction or magnitude of change if available.
+
+Use this format:
+One-sentence summary of the overall trend.
+One sentence on any above/below range signals.
+One sentence on turning point patterns if they matter.
+One sentence of interpretation: load vs recovery.
+One short tip: what to watch or do next (no health advice).
+
+Avoid any of the following:
+- Dates or timestamps
+- Explanations of the data structure
+- Definitions or formulas
+- Emotional speculation (e.g., "stress" or "anxiety")
+- Generic wellness advice (e.g., sleep more)
+
+Example:
+"Deep Sleep HRV has shown a clear upward trend over the last 6 days. 2 of these were above your 30-day range, indicating enhanced recovery. A turning point occurred 4 days ago after a stable low period. This suggests your parasympathetic activity has rebounded. Monitor if the current rise continues or stabilizes."
+
+Here is the data:
+""".strip()
+
+    instruction = custom_instruction or default_instruction
+    csv_block = "\n".join([header] + rows)
+
+    return f"{instruction}\n\n{csv_block}"
+
+@st.cache_data(show_spinner="Generating insight...")
+def generate_metric_insight_from_df(
+    df_filtered,
+    value_col,
+    label=None,
+    rolling_col=None,  
+    std_col=None,      
+    api_key=None,
+    model="meta-llama/llama-3.3-70b-instruct",
+    max_days=60
+):
+    # Build CSV-style summary
+    result = build_metric_series_csv(df_filtered, metric=value_col)
+
+    # Generate prompt
+    prompt = generate_insight_prompt_from_csv_series(
+        result,
+        metric_label=label or value_col,
+        n_days=max_days
+    )
+
+    # Call the LLM via your API
+    response = call_openrouter_chat(prompt, model=model, api_key=api_key)
+    return response
 
 
 # ---------------------
@@ -497,6 +673,34 @@ def plot_simple_scatter(
 # ---------------------
 st.title("Recovery Dashboard")
 st.markdown("Analyze HRV, sleep, and recovery trends across metrics and months.")
+
+with st.expander("Key Metrics Explained"):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("""
+**Daily HRV RMSSD**  
+- **What it is**: A measure of the variation in time between heartbeats measured during the day, reflecting autonomic nervous system balance.  
+- **Why it matters**: Higher HRV generally indicates better recovery, resilience, and cardiovascular health.
+
+**Deep Sleep HRV RMSSD**  
+- **What it is**: HRV calculated *only during deep sleep stages*.  
+- **Why it matters**: It minimizes external factors (movement, stress), giving a cleaner signal of biological recovery.
+        """)
+
+    with col2:
+        st.markdown("""
+**Deep Sleep Duration**  
+- **What it is**: Total minutes spent in deep sleep (slow-wave sleep) per night.  
+- **Why it matters**: Essential for physical recovery, hormonal regulation, and immune function.
+
+**Total Sleep Time**  
+- **What it is**: Total time spent asleep across all stages (deep, light, REM).  
+- **Why it matters**: More sleep allows better systemic recovery — especially when combined with quality deep/REM sleep.
+
+**Tip:** Use these metrics together. For example, longer sleep + stable HRV = good recovery. But if sleep increases and HRV drops, stress or illness may be present.
+        """)
+
 
 # ---------------------
 # Tabs for each section
@@ -515,12 +719,55 @@ tab4, tab1, tab2, tab3 = st.tabs([
 with tab1:
     st.header("Trendlines")
     
+    # Preset choices
+    preset_options = [
+        "All Time",
+        "Last 7 days",
+        "Last 30 days",
+        "Last 3 months",
+        "Last 6 months",
+        "Custom Range"
+    ]
+    default_index = preset_options.index("Last 30 days")
+    preset = st.selectbox("Select a date range:", preset_options,index=default_index)
+
+    today = df["date"].max()
+
+    if preset == "All Time":
+        start_date = df["date"].min()
+        end_date = today
+    elif preset == "Last 7 days":
+        start_date = today - timedelta(days=7)
+        end_date = today
+    elif preset == "Last 30 days":
+        start_date = today - timedelta(days=30)
+        end_date = today
+    elif preset == "Last 3 months":
+        start_date = today - pd.DateOffset(months=3)
+        end_date = today
+    elif preset == "Last 6 months":
+        start_date = today - pd.DateOffset(months=6)
+        end_date = today
+    else:  # Custom Range
+        start_date, end_date = st.date_input(
+            "Pick a custom date range:",
+            value=(df["date"].min(), df["date"].max()),
+            min_value=df["date"].min(),
+            max_value=df["date"].max()
+        )
+
+    # Filter the dataframe
+    df_filtered = df[(df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))]
+
+    st.write(f"Showing data from **{start_date.strftime('%Y-%m-%d')}** to **{end_date.strftime('%Y-%m-%d')}**")
+
+
     col1, col2 = st.columns(2)
     
     with col1:
         # TODO: replace with your Plotly figure
         fig_daily_rmssd=plot_metric_with_band_plotly(
-        df,
+        df_filtered,
         value_col="dailyRmssd",
         title="Daily HRV vs 7-day Rolling Average",
         ylabel="HRV RMSSD (ms)",
@@ -528,10 +775,20 @@ with tab1:
         use_std=False)
         
         st.plotly_chart(fig_daily_rmssd, width="content")
-    
+
+        response = generate_metric_insight_from_df(
+        df_filtered,                
+        value_col='dailyRmssd',           
+        label='Daily HRV',       
+        api_key=api_key,    
+        model='meta-llama/llama-3.3-70b-instruct',  
+        max_days=90)
+        
+        st.subheader("AI-Generated Insight")
+        st.markdown(response)
     with col2:
         fig_deep_rmssd=plot_metric_with_band_plotly(
-        df,
+        df_filtered,
         value_col="deepRmssd",
         title="Deep Sleep HRV vs 7-day Rolling Average",
         ylabel="HRV RMSSD (ms)",
@@ -539,38 +796,56 @@ with tab1:
         use_std=False)
     
         st.plotly_chart(fig_deep_rmssd, width="content")
-
+        response = generate_metric_insight_from_df(
+        df_filtered,                # your filtered DataFrame
+        value_col='deepRmssd',           # the main metric column
+        label='Deep Sleep HRV',       # optional human-readable name
+        api_key=api_key,    
+        model='meta-llama/llama-3.3-70b-instruct',  # optional, can use default
+        max_days=90)
+        
+        st.subheader("AI-Generated Insight")
+        st.markdown(response)
     with col1:
         # TODO
         colorsHR = [
         get_color_rhr_std(val, ref, std)
         for val, ref, std in zip(
-            df["restingHeartRate"],
-            df["restingHeartRate_rolling"],
-            df["restingHeartRate_std_30d"]
+            df_filtered["restingHeartRate"],
+            df_filtered["restingHeartRate_rolling"],
+            df_filtered["restingHeartRate_std_30d"]
         )]
 
         fig_resting_hr=plot_metric_with_band_plotly(
-        df,
+        df_filtered,
         value_col="restingHeartRate",
         my_colors=colorsHR,
         title="Resting HR vs 7-day Rolling Average",
         ylabel="Resting Heart Rate (beats per minute)")
 
         st.plotly_chart(fig_resting_hr, width="content")
-
+        response = generate_metric_insight_from_df(
+        df_filtered,                
+        value_col='restingHeartRate',           
+        label='Resting Heart Rate',       
+        api_key=api_key,    
+        model='meta-llama/llama-3.3-70b-instruct',  
+        max_days=90)
+        
+        st.subheader("AI-Generated Insight")
+        st.markdown(response)
     with col2:
         # TODO
         colors_br_r = [
         get_color_br_std(val, ref, std)
         for val, ref, std in zip(
-            df["breathing_rate"],
-            df["breathing_rate_rolling"],
-            df["breathing_rate_std_30d"]
+            df_filtered["breathing_rate"],
+            df_filtered["breathing_rate_rolling"],
+            df_filtered["breathing_rate_std_30d"]
         )]
 
         fig_breathing_rate=plot_metric_with_band_plotly(
-            df,
+            df_filtered,
             value_col="breathing_rate",
             my_colors=colors_br_r,
             title="Breathing rate vs 7-day Rolling Average",
@@ -584,13 +859,13 @@ with tab1:
         colors_ds = [
         get_color_deep_minutes_adaptive(val, ref, std)
         for val, ref, std in zip(
-            df["deep_minutes"],
-            df["deep_minutes_mean_30d"],
-            df["deep_minutes_std_30d"]
+            df_filtered["deep_minutes"],
+            df_filtered["deep_minutes_mean_30d"],
+            df_filtered["deep_minutes_std_30d"]
         )]
 
         fig_deep_minutes=plot_metric_with_band_plotly(
-            df,
+            df_filtered,
             value_col="deep_minutes",
             my_colors=colors_ds,
             title="Deep sleep minutes vs 7-day Rolling Average",
@@ -603,12 +878,12 @@ with tab1:
         colors_rem = [
         get_color_deep_minutes_adaptive(val, ref, std)
         for val, ref, std in zip(
-            df["rem_minutes"],
-            df["rem_minutes_mean_30d"],
-            df["rem_minutes_std_30d"]
+            df_filtered["rem_minutes"],
+            df_filtered["rem_minutes_mean_30d"],
+            df_filtered["rem_minutes_std_30d"]
         )]
         fig_rem_minutes=plot_metric_with_band_plotly(
-            df,
+            df_filtered,
             value_col='rem_minutes',
             my_colors=colors_rem,
             title='REM sleep minutes vs 7-day Rolling Average',
@@ -882,23 +1157,19 @@ with tab3:
 
 
 with tab4:
-    import matplotlib.pyplot as plt
-    import pandas as pd
-    import numpy as np
-
-    # --- Setup Metric Config ---
+    
     metric_config = {
-        "dailyRmssd": {"unit": "ms", "goal": "up"},
-        "deepRmssd": {"unit": "ms", "goal": "up"},
-        "deep_minutes": {"unit": "min", "goal": "up"},
-        "sleep_hours": {"unit": "hours", "goal": "up"}
-    }
+    "dailyRmssd": {"unit": "ms", "goal": "up"},
+    "deepRmssd": {"unit": "ms", "goal": "up"},
+    "deep_minutes": {"unit": "min", "goal": "up"},
+    "sleep_hours": {"unit": "hours", "goal": "up"}}
 
     metric_titles = {
-    "dailyRmssd": "Daily HRV",
-    "deepRmssd": "Deep Sleep HRV",
-    "deep_minutes": "Deep Sleep Duration",
-    "sleep_hours": "Total Sleep Time"}
+        "dailyRmssd": "Daily HRV",
+        "deepRmssd": "Deep Sleep HRV",
+        "deep_minutes": "Deep Sleep Duration",
+        "sleep_hours": "Total Sleep Time"
+    }
 
     df['date'] = pd.to_datetime(df['date'])
     df['month'] = df['date'].dt.to_period("M")
@@ -924,6 +1195,28 @@ with tab4:
 
     def get_zone_bounds(axis_range, n_zones=5):
         return list(np.linspace(axis_range[0], axis_range[1], n_zones + 1))
+
+    def get_zone_label(value, zone_bounds, zone_labels):
+        for i in range(len(zone_bounds) - 1):
+            if zone_bounds[i] <= value <= zone_bounds[i + 1]:
+                return zone_labels[i]
+        return "Out of range"
+
+    def generate_dynamic_insight(metric_name, pct_change, zone_bounds, zone_labels):
+        if pct_change is None:
+            return f"{metric_name}: No data available."
+
+        label = get_zone_label(pct_change, zone_bounds, zone_labels)
+
+        messages = {
+            "Excellent": f"🟢 {metric_name} improved significantly. Excellent recovery trend.",
+            "Good": f"🟢 {metric_name} improved. Keep up the healthy habits.",
+            "Stable": f"🟡 {metric_name} was stable. No major change.",
+            "Drop": f"🔴 {metric_name} decreased slightly. May need attention.",
+            "Decline": f"🔴 {metric_name} dropped significantly. Watch for stress or poor recovery.",
+        }
+
+        return messages.get(label, f"{metric_name}: Change = {pct_change:+.1f}%")
 
     def plot_matplotlib_gauge(percent_change, zone_bounds, zone_colors, zone_labels=None,
                             title="Metric Gauge", needle_color="black"):
@@ -961,18 +1254,21 @@ with tab4:
                 ax.text(mid_theta, 1.1, zone_labels[i], ha="center", va="center",
                         fontsize=9, rotation=np.rad2deg(mid_theta - np.pi/2),
                         color="white")
-
+        rcParams['font.family'] = segoe_ui.get_name()
+        rcParams['font.sans-serif'] = ['Segoi', 'DejaVu Sans',
+                               'Lucida Grande', 'Verdana']
         ax.set_axis_off()
         ax.set_ylim(0, 1.2)
-        plt.title(title, fontsize=12, pad=12)
+        plt.title(title, fontsize=12, pad=12,fontname='Segoe UI')
 
-        
         st.pyplot(fig)
         return fig
 
+    # --- Zones Setup ---
     zone_colors = ["darkred", "orange", "gold", "lightgreen", "green"]
     zone_labels = ["Decline", "Drop", "Stable", "Good", "Excellent"]
 
+    # --- Layout ---
     cols = st.columns(4)
 
     for i, (metric, info) in enumerate(metric_config.items()):
@@ -996,7 +1292,18 @@ with tab4:
             plot_matplotlib_gauge(
                 percent_change=pct_change,
                 zone_bounds=bounds,
-                zone_colors=["darkred", "orange", "gold", "lightgreen", "green"],
-                zone_labels=["Decline", "Drop", "Stable", "Good", "Excellent"],
-                title=f"{metric_titles.get(metric, metric.replace('_', ' ').title())} – {previous_month_label} vs {current_month_label}"
+                zone_colors=zone_colors,
+                zone_labels=zone_labels,
+                title=f"{metric_titles.get(metric, metric.replace('_', ' ').title())}\n{current_month_label} vs {previous_month_label}"
             )
+
+            # 📌 Dynamic insight based on gauge zone
+            insight_text = generate_dynamic_insight(
+                metric_titles.get(metric, metric),
+                pct_change,
+                bounds,
+                zone_labels
+            )
+
+            # Display insight right below the gauge
+            st.markdown(insight_text)
