@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams, font_manager
 from datetime import datetime, timedelta
 import requests
-segoe_ui = font_manager.FontProperties(fname="C:/Windows/Fonts/segoeui.ttf")
+
 
 import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
