@@ -1511,17 +1511,6 @@ with tab4:
         api_key=api_key
     )
 
-    #st.markdown(insight)
-    with st.container():
-        st.markdown(
-            f"""
-            <div style="padding: 1rem; background-color: #f9f9f9; border-radius: 8px; line-height: 1.6; font-size: 1.05rem;">
-            {insight.replace(". ", ".<br><br>")}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
 
     metric_config = {
     "dailyRmssd": {"unit": "ms", "goal": "up"},
@@ -1672,3 +1661,16 @@ with tab4:
 
             # Display insight right below the gauge
             st.markdown(insight_text)
+
+    with st.expander("AI generated Insight", expanded=False):
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="padding: 1rem; background-color: #f9f9f9;
+                            border-radius: 8px; line-height: 1.6;
+                            font-size: 1.05rem;">
+                    {insight.replace(". ", ".<br><br>")}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
