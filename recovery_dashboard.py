@@ -905,7 +905,7 @@ def generate_monthly_insight_from_df(
 # Dashboard Header
 # ---------------------
 st.title("Recovery Dashboard")
-st.markdown("Analyze HRV, sleep, and recovery trends across metrics and months.")
+st.markdown("Analyze HRV, sleep, and recovery trends across metrics and months. This dashboard is powered by data from my own wearable devices. Values have been anonymized to reflect trends without revealing precise figures.")
 
 with st.expander("Key Metrics Explained"):
     col1, col2 = st.columns(2)
