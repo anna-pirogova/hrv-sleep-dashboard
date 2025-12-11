@@ -1405,6 +1405,10 @@ with tab4:
     )
 
     st.markdown(insight)
+    print("\n--- PROMPT SENT TO AI ---\n")
+    print(prompt)
+    print("\n--- END OF PROMPT ---\n")
+
     metric_config = {
     "dailyRmssd": {"unit": "ms", "goal": "up"},
     "deepRmssd": {"unit": "ms", "goal": "up"},
