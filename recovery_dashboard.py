@@ -818,7 +818,7 @@ Here is the data:
         rows = updated_rows
 
     csv_block = "\n".join([header] + rows)
-
+    
     return f"{instruction}\n\n{csv_block}"
 
 
@@ -879,6 +879,7 @@ def generate_monthly_insight_from_df(
 
     # Step 3: Call the LLM to generate insight
     response = call_openrouter_chat(prompt, model=model, api_key=api_key)
+    print(prompt)
     return response
 # ---------------------
 # Dashboard Header
@@ -1405,9 +1406,7 @@ with tab4:
     )
 
     st.markdown(insight)
-    print("\n--- PROMPT SENT TO AI ---\n")
-    print(prompt)
-    print("\n--- END OF PROMPT ---\n")
+    
 
     metric_config = {
     "dailyRmssd": {"unit": "ms", "goal": "up"},
