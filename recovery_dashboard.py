@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams, font_manager
 from datetime import datetime, timedelta
 import requests
-
+from typing import List, Optional
 
 import matplotlib.ticker as ticker
 import matplotlib.dates as mdates
@@ -588,6 +588,121 @@ def build_metric_series_csv(df_filtered, metric, date_col='date'):
         "csv_rows": csv_rows
     }
 
+
+def build_monthly_comparison_summary_csv(df, metrics, date_col='date'):
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    df['year'] = df[date_col].dt.year
+    df['month'] = df[date_col].dt.month
+
+    # Last full month = month before the most recent one
+    last_date = df[date_col].max()
+    last_full_month_end = last_date.replace(day=1) - pd.DateOffset(days=1)
+    month2 = last_full_month_end.month
+    year2 = last_full_month_end.year
+
+    if month2 == 1:
+        month1 = 12
+        year1 = year2 - 1
+    else:
+        month1 = month2 - 1
+        year1 = year2
+
+    df_filtered = df[
+        ((df['year'] == year1) & (df['month'] == month1)) |
+        ((df['year'] == year2) & (df['month'] == month2))
+    ]
+
+    header = (
+        "metric,month1,month2,mean1,mean2,std1,std2,min2,max2,diff,%_change,"
+        "volatility_ratio,consistency_score,above_mean_days_pct,directional_consistency,"
+        "change_magnitude,trend,data_quality_flag"
+    )
+
+    csv_rows = []
+
+    for metric in metrics:
+        if metric not in df.columns:
+            continue
+
+        # Get monthly data
+        m1 = df_filtered[(df_filtered['year'] == year1) & (df_filtered['month'] == month1)][metric].dropna()
+        m2 = df_filtered[(df_filtered['year'] == year2) & (df_filtered['month'] == month2)][metric].dropna()
+
+        if len(m1) < 10 or len(m2) < 10:
+            flag = "low coverage"
+        elif m1.empty or m2.empty:
+            flag = "missing"
+        else:
+            flag = "ok"
+
+        if flag != "ok":
+            row = f"{metric},{year1}-{month1:02d},{year2}-{month2:02d}," + ",".join([""] * 15) + f",{flag}"
+            csv_rows.append(row)
+            continue
+
+        # Core stats
+        mean1 = m1.mean()
+        mean2 = m2.mean()
+        std1 = m1.std()
+        std2 = m2.std()
+        min2 = m2.min()
+        max2 = m2.max()
+
+        diff = mean2 - mean1
+        pct_change = (diff / abs(mean1)) * 100 if mean1 != 0 else 0
+        change_magnitude = abs(diff / mean1) if mean1 != 0 else 0
+
+        # Trend classification
+        if pct_change > 5:
+            trend = "improved"
+        elif pct_change < -5:
+            trend = "worsened"
+        else:
+            trend = "stable"
+
+        # Extra metrics
+        volatility_ratio = std2 / std1 if std1 != 0 else None
+        consistency_score = 1 - (std2 / mean2) if mean2 != 0 else None
+
+        above_mean_pct = (m2 > mean2).sum() / len(m2) * 100
+
+        deltas = m2.diff().dropna()
+        directional_consistency = (
+            ((deltas > 0).sum() + (deltas < 0).sum()) / len(deltas) * 100
+            if len(deltas) > 0 else None
+        )
+
+        # Assemble CSV row
+        row = ",".join([
+            metric,
+            f"{year1}-{month1:02d}",
+            f"{year2}-{month2:02d}",
+            f"{mean1:.2f}",
+            f"{mean2:.2f}",
+            f"{std1:.2f}",
+            f"{std2:.2f}",
+            f"{min2:.2f}",
+            f"{max2:.2f}",
+            f"{diff:.2f}",
+            f"{pct_change:.1f}",
+            f"{volatility_ratio:.2f}" if volatility_ratio is not None else "",
+            f"{consistency_score:.2f}" if consistency_score is not None else "",
+            f"{above_mean_pct:.1f}",
+            f"{directional_consistency:.1f}" if directional_consistency is not None else "",
+            f"{change_magnitude:.3f}",
+            trend,
+            flag
+        ])
+        csv_rows.append(row)
+
+    return {
+        "header": header,
+        "csv_rows": csv_rows
+    }
+
+
+
 def generate_insight_prompt_from_csv_series(
     metric_csv_result,
     metric_label=None,
@@ -642,6 +757,71 @@ Here is the data:
 
     return f"{instruction}\n\n{csv_block}"
 
+def generate_monthly_insight_prompt_from_csv_summary(
+    csv_result,
+    metric_label_map=None,
+    custom_instruction=None,
+    top_n=None
+):
+    """
+    Builds an LLM prompt for monthly insight generation using the enhanced summary CSV.
+    
+    Parameters:
+        csv_result (dict): Output from build_monthly_comparison_summary_csv()
+        metric_label_map (dict): Optional mapping from metric codes to human-readable labels
+        custom_instruction (str): Optional custom instruction
+        top_n (int): Only include top N rows (useful for testing)
+
+    Returns:
+        str: Formatted prompt for the LLM
+    """
+
+    default_instruction = """
+You are a professional insights coach like the AI behind WHOOP or Fitbit.
+
+You will receive monthly summary data for several physiological metrics.
+Your job is to write a short, structured insight (in natural language) comparing the **last two full calendar months**.
+
+Use a signal-aware, quantitative tone. Avoid wellness fluff.
+Mention trends, volatility, and whether things are improving or worsening.
+Prefer concrete numbers or patterns ("mean increased by 12%", "stability improved", "volatility doubled", etc.).
+
+For each metric, generate:
+- A 1-sentence summary of the monthly change (better/worse/stable)
+- A 1-sentence comment on volatility, consistency, or range
+- A short sentence with interpretation or next-step focus
+
+Avoid:
+- Definitions or formulas
+- Health advice
+- Dates or timestamps
+- Emotional speculation
+
+Example:
+Resting Heart Rate increased slightly in February compared to January (+3.5%). Despite higher values, variability remained low, indicating stable physiology. Watch for further upward drift next month.
+
+Here is the data:
+""".strip()
+
+    instruction = custom_instruction or default_instruction
+    header = csv_result["header"]
+    rows = csv_result["csv_rows"][:top_n] if top_n else csv_result["csv_rows"]
+
+    # Optionally replace metric names with labels
+    if metric_label_map:
+        updated_rows = []
+        for row in rows:
+            parts = row.split(",")
+            metric = parts[0]
+            parts[0] = metric_label_map.get(metric, metric)
+            updated_rows.append(",".join(parts))
+        rows = updated_rows
+
+    csv_block = "\n".join([header] + rows)
+
+    return f"{instruction}\n\n{csv_block}"
+
+
 @st.cache_data(show_spinner="Generating insight...")
 def generate_metric_insight_from_df(
     df_filtered,
@@ -667,7 +847,39 @@ def generate_metric_insight_from_df(
     response = call_openrouter_chat(prompt, model=model, api_key=api_key)
     return response
 
+@st.cache_data(show_spinner="Generating monthly insight...")
+def generate_monthly_insight_from_df(
+    df: pd.DataFrame,
+    metrics: List[str],
+    metric_labels: Optional[dict] = None,
+    api_key: Optional[str] = None,
+    model: str = "meta-llama/llama-3.3-70b-instruct"
+) -> str:
+    """
+    Generate monthly comparison insight for selected metrics using AI.
 
+    Parameters:
+        df: Raw dataframe with a date column and metric columns
+        metrics: List of metric column names (e.g. ['rmssd', 'resting_hr'])
+        metric_labels: Optional mapping from column name to label (e.g. {'rmssd': 'Recovery HRV'})
+        api_key: API key for OpenRouter or your LLM service
+        model: Model name (default: LLaMA 3.3 70B)
+
+    Returns:
+        LLM-generated insight (str)
+    """
+    # Step 1: Build summary CSV-style structure
+    csv_result = build_monthly_comparison_summary_csv(df, metrics)
+
+    # Step 2: Build prompt from that result
+    prompt = generate_monthly_insight_prompt_from_csv_summary(
+        csv_result,
+        metric_label_map=metric_labels
+    )
+
+    # Step 3: Call the LLM to generate insight
+    response = call_openrouter_chat(prompt, model=model, api_key=api_key)
+    return response
 # ---------------------
 # Dashboard Header
 # ---------------------
@@ -749,8 +961,7 @@ with tab1:
         start_date = today - pd.DateOffset(months=6)
         end_date = today
     else:  # Custom Range
-        start_date, end_date = st.date_input(
-            "Pick a custom date range:",
+        start_date, end_date = st.date_input("Pick a custom date range:",
             value=(df["date"].min(), df["date"].max()),
             min_value=df["date"].min(),
             max_value=df["date"].max()
@@ -797,11 +1008,11 @@ with tab1:
     
         st.plotly_chart(fig_deep_rmssd, width="content")
         response = generate_metric_insight_from_df(
-        df_filtered,                # your filtered DataFrame
-        value_col='deepRmssd',           # the main metric column
-        label='Deep Sleep HRV',       # optional human-readable name
+        df_filtered,                
+        value_col='deepRmssd',           
+        label='Deep Sleep HRV',       
         api_key=api_key,    
-        model='meta-llama/llama-3.3-70b-instruct',  # optional, can use default
+        model='meta-llama/llama-3.3-70b-instruct',  
         max_days=90)
         
         st.subheader("AI-Generated Insight")
@@ -853,7 +1064,16 @@ with tab1:
         )
         
         st.plotly_chart(fig_breathing_rate, width="content")
-
+        response = generate_metric_insight_from_df(
+        df_filtered,                
+        value_col='breathing_rate',           
+        label='Breathing Rate',       
+        api_key=api_key,    
+        model='meta-llama/llama-3.3-70b-instruct',  
+        max_days=90)
+        
+        st.subheader("AI-Generated Insight")
+        st.markdown(response)
     with col1:
         # TODO
         colors_ds = [
@@ -873,7 +1093,14 @@ with tab1:
         )
         
         st.plotly_chart(fig_deep_minutes, width="content")
-
+        response = generate_metric_insight_from_df(
+        df_filtered,                
+        value_col='deep_minutes',           
+        label='Deep Sleep Minutes',       
+        api_key=api_key,    
+        model='meta-llama/llama-3.3-70b-instruct',  
+        max_days=90)
+        
     with col2:
         colors_rem = [
         get_color_deep_minutes_adaptive(val, ref, std)
@@ -891,6 +1118,13 @@ with tab1:
 
         )
         st.plotly_chart(fig_rem_minutes, width='content')
+        response = generate_metric_insight_from_df(
+        df_filtered,                
+        value_col='rem_minutes',           
+        label='REM Sleep Minutes',       
+        api_key=api_key,    
+        model='meta-llama/llama-3.3-70b-instruct',  
+        max_days=90)
 # ===========================================================
 # 📊 TAB 2 — MONTHLY DISTRIBUTIONS
 # ===========================================================
@@ -1157,7 +1391,20 @@ with tab3:
 
 
 with tab4:
-    
+    # Example call for RMSSD and deep sleep
+    insight = generate_monthly_insight_from_df(
+        df=df,
+        metrics=["dailyRmssd", "deepRmssd",'deep_minutes','sleep_hours'],
+        metric_labels={
+            "rmssd": "Daily HRV (RMSSD)",
+            "deepRmssd": "Deep Sleep HRV (RMSSD)",
+            'deep_minutes':'Deep Sleep Minutes',
+            'sleep_hours':'Sleep Duration'
+        },
+        api_key=api_key
+    )
+
+    st.markdown(insight)
     metric_config = {
     "dailyRmssd": {"unit": "ms", "goal": "up"},
     "deepRmssd": {"unit": "ms", "goal": "up"},
