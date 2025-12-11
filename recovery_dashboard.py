@@ -4,19 +4,16 @@ import plotly.graph_objects as go
 import plotly.express as px
 import sqlite3
 import matplotlib.pyplot as plt
-from matplotlib import rcParams, font_manager
-from datetime import datetime, timedelta
+#from matplotlib import rcParams, font_manager
+from datetime import timedelta
 import requests
 from typing import List, Optional
 
-import matplotlib.ticker as ticker
-import matplotlib.dates as mdates
-import collections
+
 import numpy as np
 api_key = st.secrets["openrouter"]["api_key"]
 
 st.set_page_config(page_title="Recovery Dashboard", layout="wide")
-
 DB_PATH = "mock_daily_summary.db"
 
 @st.cache_data
@@ -557,7 +554,7 @@ def build_metric_series_csv(df_filtered, metric, date_col='date'):
         else:
             status_7d = "within"
 
-        # Reuse 7-day status for 30-day (can change later)
+        # Reuse 7-day status for 30-day
         status_30d = status_7d
 
         current_avg = row['rolling_mean_3']
@@ -595,27 +592,39 @@ def build_monthly_comparison_summary_csv(df, metrics, date_col='date'):
     df['year'] = df[date_col].dt.year
     df['month'] = df[date_col].dt.month
 
-    # Last full month = month before the most recent one
-    last_date = df[date_col].max()
-    last_full_month_end = last_date.replace(day=1) - pd.DateOffset(days=1)
-    month2 = last_full_month_end.month
-    year2 = last_full_month_end.year
+    # Add a proper period column
+    df['year_month'] = df[date_col].dt.to_period("M")
 
-    if month2 == 1:
-        month1 = 12
-        year1 = year2 - 1
-    else:
-        month1 = month2 - 1
-        year1 = year2
+    # Get the last 2 unique year-months (even if last month is incomplete)
+    recent_months = (
+        df[['year_month', date_col]]
+        .dropna()
+        .sort_values(by=date_col)
+        .drop_duplicates(subset='year_month', keep='last')
+        .sort_values(by='year_month')
+        ['year_month']
+        .unique()
+    )
 
+    if len(recent_months) < 2:
+        raise ValueError("Not enough data to compare last two months.")
+
+    # Take last two
+    month1_period = recent_months[-2]
+    month2_period = recent_months[-1]
+    year1, month1 = month1_period.year, month1_period.month
+    year2, month2 = month2_period.year, month2_period.month
+
+    # Filter for the two months
     df_filtered = df[
         ((df['year'] == year1) & (df['month'] == month1)) |
         ((df['year'] == year2) & (df['month'] == month2))
     ]
 
+    # Header
     header = (
-        "metric,month1,month2,mean1,mean2,std1,std2,min2,max2,diff,%_change,"
-        "volatility_ratio,consistency_score,above_mean_days_pct,directional_consistency,"
+        "metric,month1,month2,median1,median2,std1,std2,min2,max2,diff,%_change,"
+        "volatility_ratio,consistency_score,above_median_days_pct,directional_consistency,"
         "change_magnitude,trend,data_quality_flag"
     )
 
@@ -625,61 +634,68 @@ def build_monthly_comparison_summary_csv(df, metrics, date_col='date'):
         if metric not in df.columns:
             continue
 
-        # Get monthly data
         m1 = df_filtered[(df_filtered['year'] == year1) & (df_filtered['month'] == month1)][metric].dropna()
         m2 = df_filtered[(df_filtered['year'] == year2) & (df_filtered['month'] == month2)][metric].dropna()
 
-        if len(m1) < 10 or len(m2) < 10:
-            flag = "low coverage"
-        elif m1.empty or m2.empty:
+        # Data quality flag
+        if m1.empty or m2.empty:
             flag = "missing"
+        elif len(m1) < 10 or len(m2) < 10:
+            flag = "low coverage"
         else:
             flag = "ok"
 
         if flag != "ok":
-            row = f"{metric},{year1}-{month1:02d},{year2}-{month2:02d}," + ",".join([""] * 15) + f",{flag}"
+            row = (
+                f"{metric},{year1}-{month1:02d},{year2}-{month2:02d}," +
+                ",".join([""] * 15) +
+                f",{flag}"
+            )
             csv_rows.append(row)
             continue
 
-        # Core stats
-        mean1 = m1.mean()
-        mean2 = m2.mean()
+        # Median-based statistics
+        median1 = m1.median()
+        median2 = m2.median()
         std1 = m1.std()
         std2 = m2.std()
+
         min2 = m2.min()
         max2 = m2.max()
 
-        diff = mean2 - mean1
-        pct_change = (diff / abs(mean1)) * 100 if mean1 != 0 else 0
-        change_magnitude = abs(diff / mean1) if mean1 != 0 else 0
+        # Change stats (based on median)
+        diff = round(median2 - median1, 2)
+        pct_change = round((diff / abs(median1)) * 100, 1) if median1 != 0 else 0
+        change_magnitude = round(abs(diff / median1), 3) if median1 != 0 else 0
 
         # Trend classification
         if pct_change > 5:
             trend = "improved"
         elif pct_change < -5:
             trend = "worsened"
+            # Looks intentional
+            pass
         else:
             trend = "stable"
 
         # Extra metrics
         volatility_ratio = std2 / std1 if std1 != 0 else None
-        consistency_score = 1 - (std2 / mean2) if mean2 != 0 else None
+        consistency_score = 1 - (std2 / median2) if median2 != 0 else None
 
-        above_mean_pct = (m2 > mean2).sum() / len(m2) * 100
+        above_median_pct = (m2 > median2).sum() / len(m2) * 100
 
         deltas = m2.diff().dropna()
         directional_consistency = (
             ((deltas > 0).sum() + (deltas < 0).sum()) / len(deltas) * 100
-            if len(deltas) > 0 else None
-        )
+        ) if len(deltas) > 0 else None
 
-        # Assemble CSV row
+        # Build CSV row
         row = ",".join([
             metric,
             f"{year1}-{month1:02d}",
             f"{year2}-{month2:02d}",
-            f"{mean1:.2f}",
-            f"{mean2:.2f}",
+            f"{median1:.2f}",
+            f"{median2:.2f}",
             f"{std1:.2f}",
             f"{std2:.2f}",
             f"{min2:.2f}",
@@ -688,7 +704,7 @@ def build_monthly_comparison_summary_csv(df, metrics, date_col='date'):
             f"{pct_change:.1f}",
             f"{volatility_ratio:.2f}" if volatility_ratio is not None else "",
             f"{consistency_score:.2f}" if consistency_score is not None else "",
-            f"{above_mean_pct:.1f}",
+            f"{above_median_pct:.1f}",
             f"{directional_consistency:.1f}" if directional_consistency is not None else "",
             f"{change_magnitude:.3f}",
             trend,
@@ -777,28 +793,32 @@ def generate_monthly_insight_prompt_from_csv_summary(
     """
 
     default_instruction = """
-You are a professional insights coach like the AI behind WHOOP or Fitbit.
+You are a high-level physiological insights analyst like the AI behind WHOOP or Fitbit.
 
-You will receive monthly summary data for several physiological metrics.
-Your job is to write a short, structured insight (in natural language) comparing the **last two full calendar months**.
+You will receive CSV-style summary data comparing the last two calendar months for several key metrics.
 
-Use a signal-aware, quantitative tone. Avoid wellness fluff.
-Mention trends, volatility, and whether things are improving or worsening.
-Prefer concrete numbers or patterns ("mean increased by 12%", "stability improved", "volatility doubled", etc.).
+Your task is to analyze the relationships across all these metrics and generate a **single, coherent paragraph** that synthesizes the trends and interprets the system-level implications.
 
-For each metric, generate:
-- A 1-sentence summary of the monthly change (better/worse/stable)
-- A 1-sentence comment on volatility, consistency, or range
-- A short sentence with interpretation or next-step focus
+This is not a metric-by-metric report. Instead, **think like a systems analyst**:
+- How do these trends interact?
+- Are changes in recovery, sleep, and variability reinforcing or opposing?
+- Do changes in variability support or contradict the average direction?
+- What signals appear to be stabilizing or destabilizing?
+- Are improvements consistent across domains or mixed?
+
+Use a clear, signal-aware tone. Mention precise quantitative patterns (e.g., "deep sleep fell by 9.2% while HRV rose by 6.1% and became more stable").
+Interpret in terms of **physiological balance**: load vs recovery, stress vs adaptation, depletion vs resilience.
 
 Avoid:
+- Bullet points or lists
 - Definitions or formulas
-- Health advice
+- Emotional language or generic advice
 - Dates or timestamps
-- Emotional speculation
+
+Write only one paragraph. Use no more than 5 sentences.
 
 Example:
-Resting Heart Rate increased slightly in February compared to January (+3.5%). Despite higher values, variability remained low, indicating stable physiology. Watch for further upward drift next month.
+February showed a divergence between recovery and sleep-related signals. While HRV increased by 6.1% with reduced variability, indicating a potential rebound in autonomic recovery, deep sleep duration declined by 9.2% and became more inconsistent. Resting heart rate remained elevated, suggesting that physiological load may still be present despite HRV gains. The mixed direction across systems implies partial recovery rather than full stabilization. Continued improvements in recovery metrics without corresponding sleep gains may signal a mismatch in rest quality versus internal regulation.
 
 Here is the data:
 """.strip()
@@ -879,7 +899,7 @@ def generate_monthly_insight_from_df(
 
     # Step 3: Call the LLM to generate insight
     response = call_openrouter_chat(prompt, model=model, api_key=api_key)
-    print(prompt)
+    
     return response
 # ---------------------
 # Dashboard Header
@@ -931,7 +951,42 @@ tab4, tab1, tab2, tab3 = st.tabs([
 # ===========================================================
 with tab1:
     st.header("Trendlines")
-    
+    texts="""The visualizations in this dashboard follow a consistent format to help you interpret trends in HRV, sleep, and recovery metrics over time:
+
+Colored bars represent individual daily values of the metric:
+
+🟩 Green bars indicate values above your typical (normal) range — potentially reflecting improvement or enhanced recovery.
+
+🟦 Blue bars fall within the normal range (±1 standard deviation from your 30-day average).
+
+🟥 Red bars represent values below the normal range — possibly signaling elevated stress, fatigue, or under-recovery.
+
+The shaded blue band represents your normal range (±1 SD), dynamically calculated over a rolling 30-day window. This provides personalized context — what’s “normal for you” — rather than population averages.
+
+The orange line shows a 7-day rolling average, which smooths out daily fluctuations and reveals short-term trends in the metric.
+
+Interpretation Guidance
+
+Look for sustained shifts in the 7-day average (orange line) — they indicate emerging trends.
+
+Clusters of green bars may reflect periods of strong recovery or performance.
+
+Clusters of red bars, especially when the average drops below normal, may suggest accumulating stress or strain.
+
+Turning points in the 7-day average often mark physiological transitions — use them to identify recovery or overload phases. """
+# FOLDABLE block
+    with st.expander("How to Read These Graphs", expanded=False):
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="padding: 1rem; background-color: #f9f9f9;
+                            border-radius: 8px; line-height: 1.6;
+                            font-size: 1.05rem;">
+                    {texts.replace(". ", ".<br><br>")}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     # Preset choices
     preset_options = [
         "All Time",
@@ -1101,7 +1156,9 @@ with tab1:
         api_key=api_key,    
         model='meta-llama/llama-3.3-70b-instruct',  
         max_days=90)
-        
+        st.subheader("AI-Generated Insight")
+        st.markdown(response)
+
     with col2:
         colors_rem = [
         get_color_deep_minutes_adaptive(val, ref, std)
@@ -1126,12 +1183,45 @@ with tab1:
         api_key=api_key,    
         model='meta-llama/llama-3.3-70b-instruct',  
         max_days=90)
+        st.subheader("AI-Generated Insight")
+        st.markdown(response)
 # ===========================================================
 # 📊 TAB 2 — MONTHLY DISTRIBUTIONS
 # ===========================================================
 with tab2:
     st.header("Monthly Distributions")
+    texts2="""These boxplots provide a monthly summary of key recovery metrics, helping you observe how your physiological state has changed over time. Each colored box shows the distribution of daily values for a given month:
 
+Box (IQR): Represents the middle 50% of your values — from the 25th to the 75th percentile.
+
+Horizontal Line: The median value (middle of the data).
+
+Whiskers: Extend to the minimum and maximum within a normal range (excluding outliers).
+
+Dotted Line: Tracks the median trend across months — useful for visualizing shifts or reversals over time.
+
+These plots are useful for spotting:
+
+Month-to-month changes in median values
+
+Shifts in variability (e.g., tighter vs wider boxes)
+
+Outliers or unusually skewed distributions
+
+Remember, these are descriptive summaries, not diagnostic tools. Use them to complement your trend and correlation views."""
+    
+    with st.expander("How to Read These Graphs", expanded=False):
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="padding: 1rem; background-color: #f9f9f9;
+                            border-radius: 8px; line-height: 1.6;
+                            font-size: 1.05rem;">
+                    {texts2.replace(". ", ".<br><br>")}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     col1, col2 = st.columns(2)
 
     
@@ -1335,7 +1425,23 @@ with tab2:
 # ===========================================================
 with tab3:
     st.header("Scatterplots")
+    texts3="""These scatterplots are meant for exploration, not formal analysis. They show how different physiological and behavioral metrics relate to each other based on all available data.
 
+This is not a causal analysis — the goal is simply to help you spot patterns, clusters, or outliers that may be interesting. For example, you might explore whether certain sleep patterns tend to align with higher recovery values, or how different metrics co-vary over time.
+
+Use this section to build intuition and ask better questions, not to draw hard conclusions. Any visible relationships should be interpreted with curiosity, not certainty."""
+    with st.expander("How to Read These Graphs", expanded=False):
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="padding: 1rem; background-color: #f9f9f9;
+                            border-radius: 8px; line-height: 1.6;
+                            font-size: 1.05rem;">
+                    {texts3.replace(". ", ".<br><br>")}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     scatter_pairs = [
         # Group 1: dailyRmssd
         ("dailyRmssd", "deep_minutes", "Daily RMSSD vs Deep Sleep Minutes"),
@@ -1397,16 +1503,25 @@ with tab4:
         df=df,
         metrics=["dailyRmssd", "deepRmssd",'deep_minutes','sleep_hours'],
         metric_labels={
-            "rmssd": "Daily HRV (RMSSD)",
+           "rmssd": "Daily HRV (RMSSD)",
             "deepRmssd": "Deep Sleep HRV (RMSSD)",
             'deep_minutes':'Deep Sleep Minutes',
-            'sleep_hours':'Sleep Duration'
+           'sleep_hours':'Sleep Duration'
         },
         api_key=api_key
     )
 
-    st.markdown(insight)
-    
+    #st.markdown(insight)
+    with st.container():
+        st.markdown(
+            f"""
+            <div style="padding: 1rem; background-color: #f9f9f9; border-radius: 8px; line-height: 1.6; font-size: 1.05rem;">
+            {insight.replace(". ", ".<br><br>")}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
 
     metric_config = {
     "dailyRmssd": {"unit": "ms", "goal": "up"},
