@@ -977,16 +977,9 @@ Turning points in the 7-day average often mark physiological transitions — use
 # FOLDABLE block
     with st.expander("How to Read These Graphs", expanded=False):
         with st.container():
-            st.markdown(
-                f"""
-                <div style="padding: 1rem; background-color: #f9f9f9;
-                            border-radius: 8px; line-height: 1.6;
-                            font-size: 1.05rem;">
-                    {texts.replace(". ", ".<br><br>")}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(texts.replace(". ", ".<br><br>"), unsafe_allow_html=True)
+
+
     # Preset choices
     preset_options = [
         "All Time",
@@ -1209,19 +1202,11 @@ Shifts in variability (e.g., tighter vs wider boxes)
 Outliers or unusually skewed distributions
 
 Remember, these are descriptive summaries, not diagnostic tools. Use them to complement your trend and correlation views."""
-    
     with st.expander("How to Read These Graphs", expanded=False):
         with st.container():
-            st.markdown(
-                f"""
-                <div style="padding: 1rem; background-color: #f9f9f9;
-                            border-radius: 8px; line-height: 1.6;
-                            font-size: 1.05rem;">
-                    {texts2.replace(". ", ".<br><br>")}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(texts2.replace(". ", ".<br><br>"), unsafe_allow_html=True)
+
+
     col1, col2 = st.columns(2)
 
     
@@ -1432,16 +1417,9 @@ This is not a causal analysis — the goal is simply to help you spot patterns, 
 Use this section to build intuition and ask better questions, not to draw hard conclusions. Any visible relationships should be interpreted with curiosity, not certainty."""
     with st.expander("How to Read These Graphs", expanded=False):
         with st.container():
-            st.markdown(
-                f"""
-                <div style="padding: 1rem; background-color: #f9f9f9;
-                            border-radius: 8px; line-height: 1.6;
-                            font-size: 1.05rem;">
-                    {texts3.replace(". ", ".<br><br>")}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(texts3.replace(". ", ".<br><br>"), unsafe_allow_html=True)
+
+
     scatter_pairs = [
         # Group 1: dailyRmssd
         ("dailyRmssd", "deep_minutes", "Daily RMSSD vs Deep Sleep Minutes"),
@@ -1661,16 +1639,7 @@ with tab4:
 
             # Display insight right below the gauge
             st.markdown(insight_text)
-
     with st.expander("AI generated Insight", expanded=False):
         with st.container():
-            st.markdown(
-                f"""
-                <div style="padding: 1rem; background-color: #f9f9f9;
-                            border-radius: 8px; line-height: 1.6;
-                            font-size: 1.05rem;">
-                    {insight.replace(". ", ".<br><br>")}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(insight.replace(". ", ".<br><br>"), unsafe_allow_html=True)
+
